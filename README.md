@@ -67,9 +67,45 @@ REPEAT_PENALTY=1.1
 
 ### 3. Start Services
 
-``` bash
+### Option A: With Jenkins (recommended)
+Spin up everything including Jenkins:
+```bash
+docker compose -f docker/docker-compose.jenkins.yml up -d --build
+```
+
+Jenkins will be available at: [http://localhost:8081](http://localhost:8081)
+
+- Login with admin credentials configured in `casc.yaml`.
+- Use **"Build with Parameters"** → select persona, model, directive, etc.
+- Pipeline will:
+  1. Pull repo  
+  2. Launch Ollama  
+  3. Build & run Agent  
+  4. Validate `/healthz` and `/readyz`  
+  5. Expose chat service
+
+### Option B: Locally (without Jenkins)
+Run only Ollama + Agent + UI:
+```bash
 docker compose -f docker/docker-compose.yml up -d --build
 ```
+
+Services:
+- **Ollama API** → `http://localhost:11434`
+- **Agent API** → `http://localhost:8080`
+- **Web UI** → `http://localhost:8080/ui/`
+
+---
+
+## Stopping Services
+```bash
+docker compose -f docker/docker-compose.yml down
+docker compose -f docker/docker-compose.jenkins.yml down
+```
+
+---
+
+
 
 ### 4. Health Check
 
@@ -143,12 +179,14 @@ curl -s http://localhost:8080/chat   -H 'Content-Type: application/json'   -d '{
 ```
 
 ### 3. TTS (speak=true)
-
-Response includes `audio_b64`, decode to `.wav` for playback.
+1. Open the UI: [http://localhost:8080/ui/](http://localhost:8080/ui/)  
+   - Select persona, directive, and model.
+   - Type or use mic 🎤 to chat.
+   - Optionally enable "Speak replies" if TTS is active.
 
 ------------------------------------------------------------------------
 
-## 🛑 Stop Services
+## 🛑 Stop All Services
 
 ``` bash
 docker stop $(docker ps -q)
