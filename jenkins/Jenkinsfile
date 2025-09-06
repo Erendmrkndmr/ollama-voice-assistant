@@ -8,8 +8,6 @@ pipeline {
     booleanParam(name: 'ASSISTANT_TTS', defaultValue: false, description: 'Speak responses on server (usually false)')
   }
   options {
-    timestamps()
-    ansiColor('xterm')
     disableConcurrentBuilds()
   }
   stages {
