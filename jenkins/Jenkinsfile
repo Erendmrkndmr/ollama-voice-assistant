@@ -68,24 +68,69 @@ EOF'''
     }
 
     stage('Build & Run Agent') {
-      steps {
-        sh 'docker compose -f docker/docker-compose.yml up -d --build agent'
-        sh 'sleep 2'
-      }
-    }
+  steps {
+    sh 'docker compose -f docker/docker-compose.yml up -d --build agent'
+    // önce healthz ile servis ayağa kalktı mı diye bak (retry'li)
+    sh '''
+set -e
+echo "[wait] agent /healthz"
+for i in $(seq 1 30); do
+  code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/healthz || true)
+  if [ "$code" = "200" ]; then
+    echo "agent healthz OK"
+    exit 0
+  fi
+  echo "not ready yet ($code). retry in 2s..."
+  sleep 2
+done
+echo "agent did not become healthy in time"
+exit 1
+'''
+  }
+}
 
-    stage('Validate') {
-      steps {
-        sh 'curl -sf http://localhost:8080/readyz'
-        sh """curl -sf -H 'Content-Type: application/json' \
-          -d '{ "persona":"${PERSONA_TYPE}", "directive":"${CUSTOM_DIRECTIVE}", "message":"Health check: reply with OK only.", "model":"${LLM_MODEL}", "speak": false }' \
-          http://localhost:8080/chat | tee logs/agent_smoke.json"""
-      }
-    }
+stage('Validate') {
+  steps {
+    // readyz de retry'li; 60 saniye dene
+    sh '''
+set -e
+echo "[wait] agent /readyz"
+for i in $(seq 1 30); do
+  code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/readyz || true)
+  if [ "$code" = "200" ]; then
+    echo "agent readyz OK"
+    break
+  fi
+  echo "not ready yet ($code). retry in 2s..."
+  sleep 2
+done
+[ "$code" = "200" ]
+'''
+
+    // smoke test
+    sh """curl -sf -H 'Content-Type: application/json' \
+      -d '{ "persona":"${PERSONA_TYPE}", "directive":"${CUSTOM_DIRECTIVE}", "message":"Health check: reply with OK only.", "model":"${LLM_MODEL}", "speak": false }' \
+      http://localhost:8080/chat | tee logs/agent_smoke.json"""
+  }
+}
+
   }
   post {
     always {
       archiveArtifacts artifacts: 'logs/agent_smoke.json', onlyIfSuccessful: false
     }
+    failure {
+    sh '''
+echo "===== docker ps ====="
+docker ps
+echo "===== docker compose ps ====="
+docker compose -f docker/docker-compose.yml ps
+echo "===== assistant-agent logs (last 200) ====="
+docker logs --tail=200 assistant-agent || true
+echo "===== ollama logs (last 200) ====="
+docker logs --tail=200 ollama || true
+'''
+  }
+
   }
 }
