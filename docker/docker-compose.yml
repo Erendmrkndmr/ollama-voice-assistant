@@ -1,0 +1,29 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ..
+      dockerfile: docker/agent.Dockerfile
+    container_name: assistant-agent
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - LLM_MODEL=${LLM_MODEL:-phi3:mini}
+      - PERSONA_DIR=/app/ollama/persona_prompts
+      - ASSISTANT_LANG=${ASSISTANT_LANG:-en}
+      - ASSISTANT_TTS=${ASSISTANT_TTS:-False}
+    depends_on:
+      - ollama
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  ollama_models:

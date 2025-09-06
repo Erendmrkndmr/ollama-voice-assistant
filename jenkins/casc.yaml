@@ -1,0 +1,47 @@
+jenkins:
+  systemMessage: "Acme AI Assistants - Jenkins (auto-provisioned)"
+  numExecutors: 2
+  mode: NORMAL
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: admin123   # ilk giriş sonrası DEĞİŞTİR!
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+unclassified:
+  location:
+    url: "http://localhost:8081/"
+
+tool:
+  git:
+    installations:
+      - name: "Default"
+        home: "git"
+
+jobs:
+  - script: >
+      pipelineJob('Acme-Assistant-Deploy') {
+        description('Deploy personalized Ollama-based assistant (persona/model/directive) and validate.')
+        parameters {
+          choiceParam('PERSONA_TYPE', ['Customer Support','DevOps Advisor','Technical Coach'], 'Assistant persona')
+          stringParam('CUSTOM_DIRECTIVE', 'Be concise and accurate.', 'Custom behavior')
+          choiceParam('LLM_MODEL', ['phi3:mini','llama3:8b','mistral:7b'], 'Base model')
+          stringParam('ASSISTANT_LANG', 'en', 'Answer language')
+          booleanParam('ASSISTANT_TTS', false, 'Speak responses on server (usually false)')
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote { url('https://github.com/Erendmrkndmr/ollama-voice-assistant.git') }   // <<<< BURAYI kendi repo URL’in ile değiştir
+                branches('*/dev')                                 // dev branch’ten çek
+              }
+            }
+            scriptPath('jenkins/Jenkinsfile')
+          }
+        }
+        triggers { }
+      }

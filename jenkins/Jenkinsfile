@@ -1,0 +1,93 @@
+pipeline {
+  agent any
+  parameters {
+    choice(name: 'PERSONA_TYPE', choices: ['Customer Support','DevOps Advisor','Technical Coach'], description: 'Assistant persona')
+    string(name: 'CUSTOM_DIRECTIVE', defaultValue: 'Be concise and accurate.', description: 'Custom behavior')
+    choice(name: 'LLM_MODEL', choices: ['phi3:mini','llama3:8b','mistral:7b'], description: 'Base model')
+    string(name: 'ASSISTANT_LANG', defaultValue: 'en', description: 'Answer language')
+    booleanParam(name: 'ASSISTANT_TTS', defaultValue: false, description: 'Speak responses on server (usually false)')
+  }
+  options {
+    timestamps()
+    ansiColor('xterm')
+    disableConcurrentBuilds()
+  }
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh 'ls -la'
+        sh 'test -f docker/docker-compose.yml && echo "compose found" || (echo "compose missing" && exit 1)'
+        sh 'test -f agents/service.py && echo "agent found" || (echo "agent missing" && exit 1)'
+      }
+    }
+
+    stage('Write .env') {
+      steps {
+        sh '''cat > .env <<'EOF'
+# LLM
+OLLAMA_URL=http://ollama:11434
+LLM_MODEL=${LLM_MODEL}
+NUM_PREDICT=64
+TEMP=0.2
+TOP_P=0.9
+REPEAT_PENALTY=1.1
+SEED=42
+
+# STT (local-only; CI’da kullanılmaz)
+WHISPER_MODEL_PATH=./models/whisper/distil-large-v3
+STT_LANG=en
+STT_FORCE_LANG=True
+STT_TASK=transcribe
+STT_BEAM_SIZE=5
+STT_TEMPERATURE=0.0
+STT_NO_SPEECH_THRESH=0.6
+STT_PATIENCE=1.0
+STT_CONDITION_PREV=True
+VAD_FRAME_MS=20
+VAD_AGGRESSIVENESS=2
+VAD_START_FRAMES=3
+VAD_END_SIL_MS=700
+VAD_MAX_SECONDS=45.0
+
+# Persona
+PERSONA_TYPE=${PERSONA_TYPE}
+CUSTOM_DIRECTIVE=${CUSTOM_DIRECTIVE}
+PERSONA_DIR=./ollama/persona_prompts
+ASSISTANT_LANG=${ASSISTANT_LANG}
+ASSISTANT_TTS=${ASSISTANT_TTS}
+EOF'''
+        sh 'echo "[INFO] .env written:" && sed -n "1,40p" .env'
+      }
+    }
+
+    stage('Ollama up & pull model') {
+      steps {
+        sh 'docker compose -f docker/docker-compose.yml up -d ollama'
+        sh "docker exec ollama ollama pull ${LLM_MODEL}"
+        sh 'curl -sf http://localhost:11434/api/tags | jq . || true'
+      }
+    }
+
+    stage('Build & Run Agent') {
+      steps {
+        sh 'docker compose -f docker/docker-compose.yml up -d --build agent'
+        sh 'sleep 2'
+      }
+    }
+
+    stage('Validate') {
+      steps {
+        sh 'curl -sf http://localhost:8080/readyz'
+        sh """curl -sf -H 'Content-Type: application/json' \
+          -d '{ "persona":"${PERSONA_TYPE}", "directive":"${CUSTOM_DIRECTIVE}", "message":"Health check: reply with OK only.", "model":"${LLM_MODEL}", "speak": false }' \
+          http://localhost:8080/chat | tee logs/agent_smoke.json"""
+      }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'logs/agent_smoke.json', onlyIfSuccessful: false
+    }
+  }
+}
