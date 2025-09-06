@@ -1,5 +1,6 @@
 pipeline {
   agent any
+
   parameters {
     choice(name: 'PERSONA_TYPE', choices: ['Customer Support','DevOps Advisor','Technical Coach'], description: 'Assistant persona')
     string(name: 'CUSTOM_DIRECTIVE', defaultValue: 'Be concise and accurate.', description: 'Custom behavior')
@@ -7,16 +8,23 @@ pipeline {
     string(name: 'ASSISTANT_LANG', defaultValue: 'en', description: 'Answer language')
     booleanParam(name: 'ASSISTANT_TTS', defaultValue: false, description: 'Speak responses on server (usually false)')
   }
+
   options {
     disableConcurrentBuilds()
   }
+
+  environment {
+    AGENT_URL = 'http://host.docker.internal:8080'
+  }
+
   stages {
+
     stage('Checkout') {
       steps {
         checkout scm
         sh 'ls -la'
-        sh 'test -f docker/docker-compose.yml && echo "compose found" || (echo "compose missing" && exit 1)'
-        sh 'test -f agents/service.py && echo "agent found" || (echo "agent missing" && exit 1)'
+        sh 'test -f docker/docker-compose.yml || (echo "compose missing" && exit 1)'
+        sh 'test -f agents/service.py || (echo "agent missing" && exit 1)'
       }
     }
 
@@ -63,16 +71,15 @@ EOF'''
       steps {
         sh 'docker compose -f docker/docker-compose.yml up -d ollama'
         sh "docker exec ollama ollama pull ${LLM_MODEL}"
-        sh 'curl -sf http://localhost:11434/api/tags | jq . || true'
+        sh 'curl -sf http://localhost:11434/api/tags || true'
       }
     }
 
     stage('Build & Run Agent') {
-  steps {
-    sh 'docker compose -f docker/docker-compose.yml up -d --build agent'
-    sh '''
+      steps {
+        sh 'docker compose -f docker/docker-compose.yml up -d --build agent'
+        sh '''
 set -e
-AGENT_URL="http://host.docker.internal:8080"
 echo "[wait] agent /healthz"
 for i in $(seq 1 30); do
   code=$(curl -s -o /dev/null -w "%{http_code}" "$AGENT_URL/healthz" || true)
@@ -86,14 +93,13 @@ done
 echo "agent did not become healthy in time"
 exit 1
 '''
-  }
-}
+      }
+    }
 
-stage('Validate') {
-  steps {
-    sh '''
+    stage('Validate') {
+      steps {
+        sh '''
 set -e
-AGENT_URL="http://host.docker.internal:8080"
 echo "[wait] agent /readyz"
 for i in $(seq 1 30); do
   code=$(curl -s -o /dev/null -w "%{http_code}" "$AGENT_URL/readyz" || true)
@@ -106,25 +112,26 @@ for i in $(seq 1 30); do
 done
 [ "$code" = "200" ]
 '''
-    sh """curl -sf -H 'Content-Type: application/json' \
-      -d '{ "persona":"${PERSONA_TYPE}", "directive":"${CUSTOM_DIRECTIVE}", "message":"Health check: reply with OK only.", "model":"${LLM_MODEL}", "speak": false }' \
-      http://host.docker.internal:8080/chat | tee logs/agent_smoke.json"""
-  }
-}
+        sh 'mkdir -p logs'
+        sh """curl -sf -H 'Content-Type: application/json' \
+  -d '{ "persona":"${PERSONA_TYPE}", "directive":"${CUSTOM_DIRECTIVE}", "message":"Health check: reply with OK only.", "model":"${LLM_MODEL}", "speak": false }' \
+  $AGENT_URL/chat | tee logs/agent_smoke.json"""
+      }
+    }
 
-post {
-  always {
-    archiveArtifacts artifacts: 'logs/agent_smoke.json', onlyIfSuccessful: false
-  }
-  failure {
-    sh '''
+  } // <- stages biter
+
+  post {
+    always {
+      archiveArtifacts artifacts: 'logs/agent_smoke.json', onlyIfSuccessful: false
+    }
+    failure {
+      sh '''
 echo "===== docker ps ====="; docker ps
 echo "===== docker compose ps ====="; docker compose -f docker/docker-compose.yml ps
 echo "===== assistant-agent logs (last 200) ====="; docker logs --tail=200 assistant-agent || true
 echo "===== ollama logs (last 200) ====="; docker logs --tail=200 ollama || true
 '''
-  }
-}
-
+    }
   }
 }
