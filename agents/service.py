@@ -5,12 +5,28 @@ from pydantic import BaseModel, Field
 import requests
 from dotenv import load_dotenv
 
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
+
+import time, logging
+
+
 load_dotenv(dotenv_path=os.getenv("ENV_FILE", ".env"))
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("agent")
+
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "phi3:mini")
 PERSONA_DIR = Path(os.getenv("PERSONA_DIR", "ollama/persona_prompts"))
 ASSISTANT_LANG = os.getenv("ASSISTANT_LANG", "en")
+NUM_PREDICT = int(os.getenv("NUM_PREDICT", "128"))
+TEMP = float(os.getenv("TEMP", "0.2"))
+TOP_P = float(os.getenv("TOP_P", "0.9"))
+REPEAT_PENALTY = float(os.getenv("REPEAT_PENALTY", "1.1"))
+
 
 PERSONAS = {
     "customer_support": PERSONA_DIR / "customer_support.txt",
@@ -30,6 +46,22 @@ class ChatResponse(BaseModel):
     audio_b64: str | None = None
 
 app = FastAPI(title="Assistant Agent Service")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists():
+    app.mount("/ui", StaticFiles(directory=static_dir, html=True), name="static")
+
+@app.get("/")
+def root():
+    return RedirectResponse(url="/ui/")
+
 
 @app.get("/healthz")
 def healthz():
@@ -66,14 +98,35 @@ def chat(req: ChatRequest):
 
     prompt = build_prompt(pfile, req.directive, req.message)
     try:
-        r = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={"model": req.model, "prompt": prompt, "stream": False},
-            timeout=120
-        )
+        payload = {
+            "model": req.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "num_predict": NUM_PREDICT,
+                "temperature": TEMP,
+                "top_p": TOP_P,
+                "repeat_penalty": REPEAT_PENALTY,
+                "stop": ["</s>", "<|end|>", "<|endoftext|>"]  #erken bitirme
+            }
+        }
+
+        t0 = time.time()
+        r = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=300)
         r.raise_for_status()
         data = r.json()
+        elapsed = time.time() - t0
+        logger.info(
+            "Ollama %s replied in %.2fs (prompt_eval=%s, gen=%s)",
+            req.model, elapsed, data.get("prompt_eval_count"), data.get("eval_count")
+        )
         text = (data.get("response") or "").strip()
+    except requests.exceptions.ReadTimeout:
+        raise HTTPException(
+            status_code=504,
+            detail=("Model response timed out. If this is the first run or CPU-only, "
+                    "pre-pull & warm the model, or lower NUM_PREDICT.")
+        )
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=str(e))
 
